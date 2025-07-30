@@ -1,127 +1,160 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import os
 import pickle
-from sklearn.ensemble import RandomForestClassifier
 import matplotlib.pyplot as plt
 import seaborn as sns
-from prophet import Prophet
-from io import BytesIO
+from sklearn.ensemble import RandomForestClassifier
 
-# --------------------
-# Configuration
-# --------------------
-st.set_page_config(page_title="💰 Finance Tracker & Predictor", layout="wide")
-st.title("💰 Personal Finance Tracker & Forecasting App")
+# Optional: Prophet for forecasting
+try:
+    from prophet import Prophet
+    prophet_available = True
+except ImportError:
+    prophet_available = False
 
-# --------------------
-# Caching model loading
-# --------------------
+# ------------------------------------
+# Streamlit Page Setup
+# ------------------------------------
+st.set_page_config(page_title="💰 Finance Predictor", layout="wide")
+st.title("💰 Personal Finance Tracker & Behavior Predictor")
+
+# ------------------------------------
+# Train model if not found
+# ------------------------------------
 @st.cache_resource
-def load_model():
-    with open("model.pkl", "rb") as f:
-        return pickle.load(f)
+def load_or_train_model():
+    if not os.path.exists("model.pkl"):
+        st.warning("Model not found – training default model.")
+        np.random.seed(42)
+        size = 200
 
-model = load_model()
-expected_features = ["income", "expenses"]
+        income = np.random.normal(3500, 800, size).astype(int)
+        expenses = income - np.random.normal(500, 400, size).astype(int)
+        expenses = np.clip(expenses, 0, None)
 
-# --------------------
-# Prediction function
-# --------------------
+        savings_ratio = (income - expenses) / income
+        labels = (savings_ratio >= 0.2).astype(int)
+
+        df = pd.DataFrame({
+            "income": income,
+            "expenses": expenses,
+            "savings_behavior": labels
+        })
+
+        X = df[["income", "expenses"]]
+        y = df["savings_behavior"]
+
+        model = RandomForestClassifier()
+        model.fit(X, y)
+
+        with open("model.pkl", "wb") as f:
+            pickle.dump(model, f)
+    else:
+        with open("model.pkl", "rb") as f:
+            model = pickle.load(f)
+    return model
+
+model = load_or_train_model()
+required_features = ["income", "expenses"]
+
+# ------------------------------------
+# Prediction Function
+# ------------------------------------
 def predict_behavior(df):
-    missing_cols = [col for col in expected_features if col not in df.columns]
-    for col in missing_cols:
-        df[col] = 0
-    df = df[expected_features]
-    probs = model.predict_proba(df)[:, 1]
+    for col in required_features:
+        if col not in df.columns:
+            df[col] = 0
+    df = df[required_features]
     preds = model.predict(df)
+    probs = model.predict_proba(df)[:, 1]
     return pd.DataFrame({
         "Prediction": preds,
         "Probability": probs
     })
 
-# --------------------
-# SINGLE RECORD PREDICTION
-# --------------------
-st.header("📍 Single Record Prediction")
+# ------------------------------------
+# SINGLE Prediction
+# ------------------------------------
+st.header("📍 Single Entry Prediction")
 with st.form("single_form"):
-    income = st.number_input("Monthly Income", min_value=0, value=3000)
-    expenses = st.number_input("Monthly Expenses", min_value=0, value=2000)
+    income = st.number_input("Monthly Income", min_value=0, value=3500)
+    expenses = st.number_input("Monthly Expenses", min_value=0, value=2400)
     submit = st.form_submit_button("Predict")
 
 if submit:
-    single_df = pd.DataFrame([[income, expenses]], columns=expected_features)
-    result = predict_behavior(single_df)
-    label = "Good Saving Behavior" if result["Prediction"][0] == 1 else "Poor Saving Behavior"
-    st.success(f"Prediction: **{label}** (Probability: {result['Probability'][0]:.2f})")
+    input_df = pd.DataFrame([[income, expenses]], columns=required_features)
+    result = predict_behavior(input_df)
+    label = "Good" if result["Prediction"][0] == 1 else "Poor"
+    st.success(f"Prediction: **{label} Saving Behavior** (Prob: {result['Probability'][0]:.2f})")
 
-# --------------------
-# BATCH PREDICTION
-# --------------------
-st.header("📤 Batch Prediction via CSV Upload")
-uploaded_file = st.file_uploader("Upload CSV (with income, expenses[, date])", type=["csv"])
+# ------------------------------------
+# BATCH Prediction
+# ------------------------------------
+st.header("📤 Batch Prediction from CSV")
+uploaded_file = st.file_uploader("Upload CSV with income, expenses, [date]", type="csv")
 
 if uploaded_file:
-    batch_df = pd.read_csv(uploaded_file)
+    df = pd.read_csv(uploaded_file)
+    st.subheader("📄 Uploaded Data")
+    st.dataframe(df.head())
 
-    st.subheader("📄 Uploaded Data Preview")
-    st.dataframe(batch_df.head())
+    predictions = predict_behavior(df)
+    output = df.copy()
+    output["Prediction"] = predictions["Prediction"]
+    output["Probability"] = predictions["Probability"]
+    output["Label"] = output["Prediction"].map({0: "Poor", 1: "Good"})
 
-    # Predict
-    result_df = predict_behavior(batch_df)
-    full_output = batch_df.copy()
-    full_output["Prediction"] = result_df["Prediction"]
-    full_output["Probability"] = result_df["Probability"]
+    st.subheader("📊 Predictions")
+    st.dataframe(output)
 
-    st.subheader("📊 Prediction Results")
-    st.dataframe(full_output)
+    # Download
+    csv_data = output.to_csv(index=False).encode("utf-8")
+    st.download_button("📥 Download CSV", csv_data, "predictions.csv", "text/csv")
 
-    # Download predictions
-    csv_out = full_output.to_csv(index=False).encode("utf-8")
-    st.download_button("📥 Download Results as CSV", csv_out, "predictions.csv", "text/csv")
-
-    # --------------------
-    # Visualizations
-    # --------------------
-    st.subheader("📈 Prediction Class Distribution")
+    # Visualization: Count by class
+    st.subheader("📈 Prediction Class Count")
     fig1, ax1 = plt.subplots()
-    sns.countplot(x="Prediction", data=full_output, ax=ax1)
-    ax1.set_xticklabels(["Poor", "Good"])
+    sns.countplot(data=output, x="Label", ax=ax1)
     ax1.set_title("Saving Behavior Predictions")
     st.pyplot(fig1)
 
-    st.subheader("📉 Income vs. Expenses (Colored by Prediction)")
+    # Scatterplot: Income vs Expenses
+    st.subheader("📉 Income vs Expenses (Colored by Prediction)")
     fig2, ax2 = plt.subplots()
-    sns.scatterplot(data=full_output, x="income", y="expenses", hue="Prediction", palette="Set2", ax=ax2)
+    sns.scatterplot(data=output, x="income", y="expenses", hue="Label", ax=ax2, palette="Set2")
     st.pyplot(fig2)
 
-    # --------------------
-    # FORECASTING with Prophet
-    # --------------------
-    st.header("📅 Forecast Future Income (Optional)")
+    # ------------------------------------
+    # Forecasting
+    # ------------------------------------
+    st.header("📅 Forecast Future Income")
 
-    if "date" in batch_df.columns and "income" in batch_df.columns:
+    if prophet_available and "date" in df.columns and "income" in df.columns:
         try:
-            forecast_df = batch_df[["date", "income"]].dropna()
-            forecast_df["date"] = pd.to_datetime(forecast_df["date"])
-            prophet_df = forecast_df.rename(columns={"date": "ds", "income": "y"})
+            forecast_data = df[["date", "income"]].dropna()
+            forecast_data["date"] = pd.to_datetime(forecast_data["date"])
+            prophet_df = forecast_data.rename(columns={"date": "ds", "income": "y"})
 
-            m = Prophet()
-            m.fit(prophet_df)
+            model_prophet = Prophet()
+            model_prophet.fit(prophet_df)
 
-            future = m.make_future_dataframe(periods=6, freq='M')
-            forecast = m.predict(future)
+            future = model_prophet.make_future_dataframe(periods=6, freq="M")
+            forecast = model_prophet.predict(future)
 
-            st.subheader("📈 Income Forecast (Next 6 Months)")
-            fig3 = m.plot(forecast)
+            st.subheader("📈 Forecast (6 Months)")
+            fig3 = model_prophet.plot(forecast)
             st.pyplot(fig3)
         except Exception as e:
             st.warning(f"Forecasting failed: {e}")
+    elif not prophet_available:
+        st.info("Install `prophet` to enable forecasting.")
     else:
-        st.info("To use forecasting, your CSV must include 'date' and 'income' columns.")
+        st.info("Upload must include 'date' and 'income' columns to forecast.")
 
-# --------------------
+# ------------------------------------
 # Footer
-# --------------------
+# ------------------------------------
 st.markdown("---")
-st.caption("Built with ❤️ using Streamlit, scikit-learn, and Prophet")
+st.caption("Built with ❤️ using Streamlit, scikit-learn, and Prophet (optional)")
