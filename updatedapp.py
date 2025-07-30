@@ -3,79 +3,108 @@ import pandas as pd
 import numpy as np
 import pickle
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.preprocessing import LabelEncoder
 from sklearn.linear_model import LinearRegression
+from sklearn.preprocessing import LabelEncoder
 import matplotlib.pyplot as plt
 import seaborn as sns
+import os
 
+st.set_option('deprecation.showPyplotGlobalUse', False)
 
 def load_data(file):
-    df = pd.read_csv(file)
-    return df
+    return pd.read_csv(file)
 
-def train_model(data):
-    data = data.copy()
+def preprocess_data(data):
     le = LabelEncoder()
-    data['Has_Debt'] = le.fit_transform(data['Has_Debt'])
-    data['Owns_Asset'] = le.fit_transform(data['Owns_Asset'])
-    data['Outcome'] = le.fit_transform(data['Outcome'])
+    for col in ['Has_Debt', 'Owns_Asset', 'Outcome']:
+        if col in data.columns:
+            data[col] = le.fit_transform(data[col])
+    return data, le
 
+def train_classifier_model(data):
     features = ['Monthly_Income', 'Monthly_Expenses', 'Savings', 'Has_Debt', 'Owns_Asset']
     target = 'Outcome'
+    clf = RandomForestClassifier()
+    clf.fit(data[features], data[target])
+    return clf, features
 
-    model = RandomForestClassifier()
-    model.fit(data[features], data[target])
+def train_savings_forecast_model(data):
+    reg = LinearRegression()
+    reg.fit(data[['Monthly_Income', 'Monthly_Expenses']], data['Savings'])
+    return reg
 
-    return model, le, features
+def single_prediction_form(le, clf, features):
+    st.subheader("🧠 Single Prediction Input")
 
-def forecast_savings(data):
-    model = LinearRegression()
-    model.fit(data[['Monthly_Income', 'Monthly_Expenses']], data['Savings'])
-    return model
+    income = st.number_input("Monthly Income (₹)", 1000, 200000, 50000)
+    expenses = st.number_input("Monthly Expenses (₹)", 500, 150000, 20000)
+    savings = st.number_input("Current Savings (₹)", 0, 1000000, 10000)
+    debt = st.selectbox("Has Debt?", ["Yes", "No"])
+    asset = st.selectbox("Owns Asset?", ["Yes", "No"])
+
+    df_input = pd.DataFrame([{
+        "Monthly_Income": income,
+        "Monthly_Expenses": expenses,
+        "Savings": savings,
+        "Has_Debt": le.transform([debt])[0],
+        "Owns_Asset": le.transform([asset])[0]
+    }])
+
+    if st.button("🔮 Predict Financial Status"):
+        pred = clf.predict(df_input[features])[0]
+        label = le.inverse_transform([pred])[0]
+        st.success(f"Prediction: **{label}**")
+
+def batch_prediction(df, clf, le, features):
+    df['Prediction'] = clf.predict(df[features])
+    df['Prediction_Label'] = le.inverse_transform(df['Prediction'])
+    return df
+
+def plot_prediction_distribution(df):
+    st.subheader("📊 Prediction Distribution")
+    fig, ax = plt.subplots()
+    sns.countplot(x='Prediction_Label', data=df, ax=ax)
+    st.pyplot(fig)
+
+def forecast_savings_form(reg):
+    st.subheader("📈 Forecast Your Future Savings")
+
+    income = st.slider("Expected Monthly Income (₹)", 10000, 200000, 50000, step=1000)
+    expenses = st.slider("Expected Monthly Expenses (₹)", 5000, 150000, 25000, step=1000)
+
+    pred = reg.predict([[income, expenses]])
+    st.success(f"Estimated Future Savings: ₹{pred[0]:,.2f}")
 
 def main():
-    st.set_page_config(page_title="Personal Finance Tracker", layout="centered")
-    st.title("💰 Personal Finance Tracker with Forecasting")
+    st.set_page_config(page_title="💰 Personal Finance Tracker", layout="centered")
+    st.title("💼 Personal Finance Tracker + Prediction + Forecast")
 
-    uploaded_file = st.file_uploader("📂 Upload your CSV file", type="csv")
+    uploaded_file = st.file_uploader("📂 Upload your CSV file", type=["csv"])
 
     if uploaded_file:
         df = load_data(uploaded_file)
-        st.write("🔍 Preview of Uploaded Data", df.head())
+        st.write("🔎 Preview of Uploaded Data", df.head())
 
-        model, le, feature_names = train_model(df)
+        processed_df, le = preprocess_data(df)
+        clf, features = train_classifier_model(processed_df)
+        reg = train_savings_forecast_model(processed_df)
 
-        st.subheader("📊 Make a Prediction")
-        income = st.number_input("Monthly Income", min_value=10000, max_value=200000)
-        expenses = st.number_input("Monthly Expenses", min_value=5000, max_value=150000)
-        savings = st.number_input("Current Savings", min_value=0, max_value=100000)
-        debt = st.radio("Has Debt?", ["Yes", "No"])
-        asset = st.radio("Owns Asset?", ["Yes", "No"])
+        # Single prediction
+        single_prediction_form(le, clf, features)
 
-        input_df = pd.DataFrame({
-            'Monthly_Income': [income],
-            'Monthly_Expenses': [expenses],
-            'Savings': [savings],
-            'Has_Debt': le.transform([debt]),
-            'Owns_Asset': le.transform([asset])
-        })
+        # Batch prediction
+        st.subheader("📁 Batch Predictions on Uploaded Data")
+        df_with_preds = batch_prediction(processed_df, clf, le, features)
+        st.write(df_with_preds[['Monthly_Income', 'Monthly_Expenses', 'Savings', 'Prediction_Label']].head())
 
-        prediction = model.predict(input_df[feature_names])[0]
-        outcome = le.inverse_transform([prediction])[0]
-        st.success(f"💡 Prediction: Your financial status is likely to be **{outcome}**.")
+        # Plot
+        plot_prediction_distribution(df_with_preds)
 
-        st.subheader("📈 Prediction Distribution")
-        df['Prediction'] = model.predict(df[feature_names])
-        df['Prediction_Label'] = le.inverse_transform(df['Prediction'])
-        sns.countplot(x="Prediction_Label", data=df)
-        st.pyplot(plt)
+        # Forecasting
+        forecast_savings_form(reg)
 
-        st.subheader("📉 Forecast Savings Based on Future Plans")
-        savings_model = forecast_savings(df)
-        future_income = st.slider("Future Income", 20000, 150000, 50000)
-        future_expense = st.slider("Future Expenses", 5000, 120000, 25000)
-        predicted_savings = savings_model.predict([[future_income, future_expense]])
-        st.success(f"🧮 Predicted Future Savings: ₹{predicted_savings[0]:,.2f}")
+    else:
+        st.warning("⚠️ Please upload a CSV file to begin.")
 
 if __name__ == "__main__":
     main()
