@@ -156,3 +156,9 @@ elif mode == "Batch Prediction":
         except Exception as e:
             st.error(f"Error: {e}")
 
+
+# ------------------------------------
+# Footer
+# ------------------------------------
+st.markdown("---")
+st.caption("Built with ❤️ using Streamlit, scikit-learn, and Prophet - By: Maria ")
