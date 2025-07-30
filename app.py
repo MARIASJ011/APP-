@@ -119,14 +119,32 @@ elif mode == "Batch Prediction":
             data = pd.read_csv(file)
             st.write("📋 Uploaded Data", data.head())
 
-            processed = preprocess_input(data, encoders, features)
-            predictions = model.predict(processed)
-            predicted_labels = encoders['Outcome'].inverse_transform(predictions)
-            data["Prediction"] = predicted_labels
-            st.write("📊 Prediction Results", data)
+            # Validate required columns
+            required_cols = set(features)
+            missing_cols = required_cols - set(data.columns)
 
-            csv = data.to_csv(index=False).encode()
-            st.download_button("⬇️ Download Predictions", csv, "predictions.csv", "text/csv")
+            if missing_cols:
+                st.error(f"❌ Uploaded file is missing required columns: {', '.join(missing_cols)}")
+                st.info("✅ Required columns are: " + ", ".join(required_cols))
+            else:
+                processed = preprocess_input(data, encoders, features)
+                predictions = model.predict(processed)
+                predicted_labels = encoders['Outcome'].inverse_transform(predictions)
+                data["Prediction"] = predicted_labels
+                st.write("📊 Prediction Results:", data)
+
+                # Download button
+                csv = data.to_csv(index=False).encode()
+                st.download_button("⬇️ Download Predictions", csv, "predictions.csv", "text/csv")
+
+                # Plot prediction distribution
+                st.subheader("📈 Prediction Distribution")
+                fig, ax = plt.subplots()
+                sns.countplot(x="Prediction", data=data, ax=ax)
+                st.pyplot(fig)
+
+        except Exception as e:
+            st.error(f"⚠️ An error occurred during prediction:\n\n{str(e)}")
 
             # Visual Summary
             st.subheader("📈 Prediction Distribution")
